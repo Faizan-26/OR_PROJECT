@@ -5,13 +5,15 @@ UI for inputting and solving LP problems with sensitivity analysis
 
 import customtkinter as ctk
 import numpy as np
+from tkinter import messagebox
 from typing import Optional, List
 
 from ui.components.matrix_input import MatrixInput, VectorInput
 from ui.components.result_display import ResultDisplay
 from ui.components.sensitivity_table import SensitivityTable
+from ui.components.what_if_panel import WhatIfPanel
 from algorithms.simplex import SimplexSolver, create_sample_problem
-from config.settings import PRODUCTS, RESOURCES, DEFAULT_LP_VARIABLES, DEFAULT_LP_CONSTRAINTS
+from config.settings import PRODUCTS, RESOURCES, DEFAULT_LP_VARIABLES, DEFAULT_LP_CONSTRAINTS, COLORS
 
 
 class SimplexView(ctk.CTkFrame):
@@ -37,13 +39,26 @@ class SimplexView(ctk.CTkFrame):
     
     def _create_layout(self):
         """Create the main layout structure"""
+        # Container for all panels
+        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
+        self.main_container.pack(fill="both", expand=True)
+        
         # Left panel (inputs)
-        self.left_panel = ctk.CTkScrollableFrame(self, width=700)
+        self.left_panel = ctk.CTkScrollableFrame(self.main_container, width=600)
         self.left_panel.pack(side="left", fill="both", expand=True, padx=5, pady=5)
         
-        # Right panel (results)
-        self.right_panel = ctk.CTkFrame(self, width=500)
-        self.right_panel.pack(side="right", fill="both", expand=True, padx=5, pady=5)
+        # Middle panel (results)
+        self.middle_panel = ctk.CTkFrame(self.main_container, width=400)
+        self.middle_panel.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        
+        # Right panel (What-If Analysis) - collapsible
+        self.right_panel_visible = True
+        self.right_panel = ctk.CTkFrame(self.main_container, width=420)
+        self.right_panel.pack(side="right", fill="both", expand=False, padx=5, pady=5)
+        
+        # Store last solution for what-if analysis
+        self.last_result = None
+        self.last_solver = None
     
     def _create_widgets(self):
         """Create all UI widgets"""
@@ -53,6 +68,7 @@ class SimplexView(ctk.CTkFrame):
         self._create_constraints_input()
         self._create_action_buttons()
         self._create_results_panel()
+        self._create_whatif_panel()
     
     def _create_header(self):
         """Create the header section"""
@@ -226,17 +242,151 @@ class SimplexView(ctk.CTkFrame):
         """Create the results display panel"""
         # Result display
         self.result_display = ResultDisplay(
-            self.right_panel,
+            self.middle_panel,
             title="Solution Results"
         )
         self.result_display.pack(fill="both", expand=True, padx=5, pady=5)
         
         # Sensitivity analysis table
         self.sensitivity_table = SensitivityTable(
-            self.right_panel,
+            self.middle_panel,
             title="Sensitivity Analysis"
         )
         self.sensitivity_table.pack(fill="both", expand=True, padx=5, pady=5)
+    
+    def _create_whatif_panel(self):
+        """Create the What-If analysis panel"""
+        # Toggle button at top
+        toggle_frame = ctk.CTkFrame(self.right_panel, fg_color="transparent")
+        toggle_frame.pack(fill="x", padx=5, pady=5)
+        
+        self.toggle_btn = ctk.CTkButton(
+            toggle_frame,
+            text="◀ Hide Panel",
+            width=100,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color=COLORS.get("text_secondary", "#64748B"),
+            hover_color="#475569",
+            command=self._toggle_whatif_panel
+        )
+        self.toggle_btn.pack(side="right")
+        
+        # What-If Panel
+        self.whatif_panel = WhatIfPanel(
+            self.right_panel,
+            on_resolve=self._resolve_whatif,
+            on_variable_change=self._on_variable_change,
+            on_constraint_change=self._on_constraint_change
+        )
+        self.whatif_panel.pack(fill="both", expand=True, padx=5, pady=5)
+    
+    def _toggle_whatif_panel(self):
+        """Toggle the visibility of the What-If panel"""
+        if self.right_panel_visible:
+            self.right_panel.pack_forget()
+            self.right_panel_visible = False
+            # Add a button to show the panel again
+            self.show_panel_btn = ctk.CTkButton(
+                self.middle_panel,
+                text="▶ Show What-If Panel",
+                width=160,
+                height=30,
+                fg_color=COLORS.get("primary", "#0F4C75"),
+                command=self._toggle_whatif_panel
+            )
+            self.show_panel_btn.pack(pady=5)
+        else:
+            if hasattr(self, 'show_panel_btn'):
+                self.show_panel_btn.destroy()
+            self.right_panel.pack(side="right", fill="both", expand=False, padx=5, pady=5)
+            self.right_panel_visible = True
+    
+    def _on_variable_change(self, action: str, index: int, name: str):
+        """Handle variable addition/removal from What-If panel"""
+        if action == 'add':
+            # Update the main input fields to reflect the change
+            messagebox.showinfo(
+                "Variable Added", 
+                f"Variable added. Click 'Re-Solve' in the What-If panel to update results."
+            )
+        elif action == 'remove':
+            messagebox.showinfo(
+                "Variable Removed", 
+                f"Variable removed. Click 'Re-Solve' in the What-If panel to update results."
+            )
+    
+    def _on_constraint_change(self, action: str, index: int, name: str):
+        """Handle constraint addition/removal from What-If panel"""
+        if action == 'add':
+            messagebox.showinfo(
+                "Constraint Added", 
+                f"Constraint added. Click 'Re-Solve' in the What-If panel to update results."
+            )
+        elif action == 'remove':
+            messagebox.showinfo(
+                "Constraint Removed", 
+                f"Constraint removed. Click 'Re-Solve' in the What-If panel to update results."
+            )
+    
+    def _resolve_whatif(self):
+        """Re-solve with modified parameters from What-If panel"""
+        try:
+            # Get modified problem data
+            problem = self.whatif_panel.get_modified_problem()
+            
+            c = np.array(problem['objective_coeffs'])
+            A_ub = problem['constraint_matrix']
+            b_ub = np.array(problem['rhs_values'])
+            var_names = problem['variable_names']
+            const_names = problem['constraint_names']
+            maximize = self.objective_var.get() == "maximize"
+            
+            # Create and solve
+            solver = SimplexSolver(
+                c=c,
+                A_ub=A_ub,
+                b_ub=b_ub,
+                maximize=maximize,
+                variable_names=var_names,
+                constraint_names=const_names
+            )
+            
+            result = solver.solve()
+            
+            # Build result dictionary
+            result_dict = {
+                'success': result.success,
+                'message': result.message,
+                'optimal_value': result.optimal_value,
+                'solution': result.solution,
+                'iterations': result.iterations
+            }
+            
+            if result.sensitivity:
+                result_dict['shadow_prices'] = result.sensitivity.shadow_prices
+                result_dict['slack_values'] = result.sensitivity.slack_values
+            
+            # Get sensitivity report with ranges
+            if result.success and result.sensitivity:
+                sens_report = solver.get_sensitivity_report()
+                result_dict['objective_ranges'] = sens_report.get('objective_ranges', [])
+                result_dict['rhs_ranges'] = sens_report.get('rhs_ranges', [])
+            
+            # Update What-If panel with new solution
+            self.whatif_panel.update_solution(result_dict)
+            
+            # Update main displays
+            self.result_display.display_lp_result(result_dict, var_names)
+            
+            if result.success and result.sensitivity:
+                sens_report = solver.get_sensitivity_report()
+                self.sensitivity_table.display_full_analysis(sens_report)
+            
+            messagebox.showinfo("Re-Solved", "Problem re-solved with modified parameters!")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to re-solve: {str(e)}")
     
     def _load_sample(self):
         """Load sample PP Chemicals problem"""
@@ -373,6 +523,26 @@ class SimplexView(ctk.CTkFrame):
             if result.success and result.sensitivity:
                 sens_report = solver.get_sensitivity_report()
                 self.sensitivity_table.display_full_analysis(sens_report)
+                
+                # Add ranges to result dict for What-If panel
+                result_dict['objective_ranges'] = sens_report.get('objective_ranges', [])
+                result_dict['rhs_ranges'] = sens_report.get('rhs_ranges', [])
+            
+            # Store for What-If analysis
+            self.last_result = result
+            self.last_solver = solver
+            
+            # Load problem into What-If panel
+            self.whatif_panel.load_problem(
+                num_variables=self.num_variables,
+                num_constraints=self.num_constraints,
+                variable_names=var_names,
+                constraint_names=const_names,
+                objective_coeffs=c,
+                constraint_matrix=A_ub,
+                rhs_values=b_ub,
+                solution=result_dict
+            )
             
         except Exception as e:
             self.result_display.set_status(False, f"Error: {str(e)}")
@@ -384,6 +554,19 @@ class SimplexView(ctk.CTkFrame):
         self.rhs_input.clear()
         self.result_display.clear()
         self.sensitivity_table.clear()
+        # Reset What-If panel
+        self.whatif_panel.load_problem(
+            num_variables=0,
+            num_constraints=0,
+            variable_names=[],
+            constraint_names=[],
+            objective_coeffs=[],
+            constraint_matrix=None,
+            rhs_values=[],
+            solution={}
+        )
+        self.last_result = None
+        self.last_solver = None
     
     def _export(self):
         """Export results to file"""

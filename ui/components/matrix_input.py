@@ -25,10 +25,14 @@ class ScrollableFrame(ctk.CTkFrame):
     """
     A frame that supports both horizontal and vertical scrolling.
     Uses tkinter Canvas for full scrolling support with modern styling.
+    Supports trackpad gestures on Windows.
     """
     
     def __init__(self, parent, width=800, height=400, **kwargs):
         super().__init__(parent, corner_radius=10, **kwargs)
+        
+        # Store parent reference
+        self._parent = parent
         
         # Get background color for canvas
         try:
@@ -76,12 +80,36 @@ class ScrollableFrame(ctk.CTkFrame):
         self.inner_frame.bind("<Configure>", self._on_frame_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         
-        # Mouse wheel scrolling (Windows optimized)
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.canvas.bind_all("<Shift-MouseWheel>", self._on_shift_mousewheel)
+        # Bind mouse wheel for this specific canvas (not global)
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind("<Shift-MouseWheel>", self._on_shift_mousewheel)
+        self.inner_frame.bind("<MouseWheel>", self._on_mousewheel)
+        self.inner_frame.bind("<Shift-MouseWheel>", self._on_shift_mousewheel)
+        
+        # Bind trackpad/touchpad gestures for Windows
+        # These events handle two-finger scrolling on trackpads
+        self.canvas.bind("<Button-4>", self._on_scroll_up)      # Linux scroll up
+        self.canvas.bind("<Button-5>", self._on_scroll_down)    # Linux scroll down
+        
+        # Bind enter/leave to manage scroll focus
+        self.canvas.bind("<Enter>", self._bind_scroll)
+        self.canvas.bind("<Leave>", self._unbind_scroll)
         
         # Set initial size
         self.canvas.configure(width=width, height=height)
+    
+    def _bind_scroll(self, event):
+        """Bind scroll events when mouse enters this widget"""
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Shift-MouseWheel>", self._on_shift_mousewheel)
+    
+    def _unbind_scroll(self, event):
+        """Unbind scroll events when mouse leaves this widget"""
+        try:
+            self.canvas.unbind_all("<MouseWheel>")
+            self.canvas.unbind_all("<Shift-MouseWheel>")
+        except:
+            pass
     
     def _on_frame_configure(self, event):
         """Update scroll region when inner frame size changes"""
@@ -92,16 +120,52 @@ class ScrollableFrame(ctk.CTkFrame):
         pass
     
     def _on_mousewheel(self, event):
-        """Vertical scroll with mouse wheel"""
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        """Vertical scroll with mouse wheel or trackpad"""
+        # Windows trackpad sends smaller delta values
+        # Normalize the scroll amount for smooth trackpad scrolling
+        if hasattr(event, 'delta'):
+            # For trackpad, delta can be much smaller, so use proportional scrolling
+            if abs(event.delta) < 120:
+                # Trackpad gesture - use smoother scrolling
+                scroll_amount = -1 if event.delta > 0 else 1
+            else:
+                # Regular mouse wheel
+                scroll_amount = int(-1 * (event.delta / 120))
+            self.canvas.yview_scroll(scroll_amount, "units")
+        return "break"  # Prevent event propagation
     
     def _on_shift_mousewheel(self, event):
-        """Horizontal scroll with Shift+mouse wheel"""
-        self.canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        """Horizontal scroll with Shift+mouse wheel or trackpad"""
+        if hasattr(event, 'delta'):
+            if abs(event.delta) < 120:
+                scroll_amount = -1 if event.delta > 0 else 1
+            else:
+                scroll_amount = int(-1 * (event.delta / 120))
+            self.canvas.xview_scroll(scroll_amount, "units")
+        return "break"
+    
+    def _on_scroll_up(self, event):
+        """Handle scroll up (Linux/some trackpads)"""
+        self.canvas.yview_scroll(-1, "units")
+        return "break"
+    
+    def _on_scroll_down(self, event):
+        """Handle scroll down (Linux/some trackpads)"""
+        self.canvas.yview_scroll(1, "units")
+        return "break"
     
     def get_inner_frame(self):
         """Return the inner frame where widgets should be placed"""
         return self.inner_frame
+    
+    def bind_children_scroll(self):
+        """Bind scroll events to all children widgets"""
+        def bind_recursive(widget):
+            widget.bind("<MouseWheel>", self._on_mousewheel)
+            widget.bind("<Shift-MouseWheel>", self._on_shift_mousewheel)
+            for child in widget.winfo_children():
+                bind_recursive(child)
+        bind_recursive(self.inner_frame)
 
 
 class MatrixInput(ctk.CTkFrame):
